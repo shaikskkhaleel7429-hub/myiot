@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Home Sensor Monitor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #111827;
+            color: white;
+            margin: 0;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: auto;
+        }
+
+        h1 {
+            margin-bottom: 25px;
+        }
+
+        .card {
+            background: #1f2937;
+            border-radius: 15px;
+            padding: 25px;
+            margin: 15px 0;
+        }
+
+        .value {
+            font-size: 42px;
+            font-weight: bold;
+            margin: 10px;
+        }
+
+        .status {
+            font-size: 25px;
+            font-weight: bold;
+            margin: 10px;
+        }
+
+        .safe {
+            color: #22c55e;
+        }
+
+        .danger {
+            color: #ef4444;
+        }
+
+        button {
+            padding: 13px 25px;
+            border: none;
+            border-radius: 8px;
+            background: #2563eb;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        #connection {
+            margin-top: 20px;
+            font-size: 15px;
+        }
+
+        .small {
+            color: #9ca3af;
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+<div class="container">
+
+    <h1>Smart Home Sensor Monitor</h1>
+
+    <button id="startButton">Enable Sound</button>
+
+    <div class="card">
+        <h2>Distance</h2>
+        <div id="distance" class="value">-- cm</div>
+        <div id="distanceStatus" class="status safe">Normal</div>
+    </div>
+
+    <div class="card">
+        <h2>Human Detection</h2>
+        <div id="motion" class="status">Waiting...</div>
+    </div>
+
+    <div id="connection">Connecting to Firebase...</div>
+    <p class="small">Firebase data is checked every 1 second.</p>
+
+</div>
+
+<script>
+    // Your Firebase Realtime Database URL
+    const FIREBASE_URL =
+        "https://iot2-85886-default-rtdb.firebaseio.com/sensors.json";
+
+    let audioContext = null;
+    let soundEnabled = false;
+
+    // Prevent the same alarm from repeatedly starting every polling cycle.
+    let distanceAlarmActive = false;
+    let motionAlarmActive = false;
+
+    /*
+     * Start Web Audio after a user click.
+     * Browsers normally block automatic sound until the user interacts
+     * with the page.
+     */
+    document.getElementById("startButton").addEventListener("click", () => {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        soundEnabled = true;
+
+        // Small silent oscillator to unlock audio on some browsers.
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        gain.gain.value = 0.001;
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.05);
+
+        document.getElementById("startButton").textContent = "Sound Enabled";
+        document.getElementById("startButton").disabled = true;
+    });
+
+    // Sound 1: distance less than 5 cm
+    function playDistanceSound() {
+        if (!soundEnabled || !audioContext) return;
+
+        const now = audioContext.currentTime;
+
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+
+        oscillator.type = "square";
+        oscillator.frequency.setValueAtTime(900, now);
+        oscillator.frequency.setValueAtTime(600, now + 0.15);
+
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.exponentialRampToValueAtTime(0.4, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+
+        oscillator.start(now);
+        oscillator.stop(now + 0.3);
+    }
+
+    // Sound 2: human/motion detected
+    function playMotionSound() {
+        if (!soundEnabled || !audioContext) return;
+
+        const now = audioContext.currentTime;
+
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(400, now);
+        oscillator.frequency.setValueAtTime(800, now + 0.12);
+
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.exponentialRampToValueAtTime(0.35, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+
+        oscillator.start(now);
+        oscillator.stop(now + 0.25);
+    }
+
+    async function readFirebase() {
+        try {
+            const response = await fetch(FIREBASE_URL, {
+                cache: "no-store"
+            });
+
+            if (!response.ok) {
+                throw new Error("Firebase HTTP error: " + response.status);
+            }
+
+            const data = await response.json();
+
+            if (!data) {
+                document.getElementById("connection").textContent =
+                    "Connected, but no sensor data found.";
+                return;
+            }
+
+            const distance = Number(data.distance_cm);
+            const motion = data.motion === true;
+
+            // Display distance
+            if (Number.isFinite(distance)) {
+                document.getElementById("distance").textContent =
+                    distance.toFixed(2) + " cm";
+
+                if (distance < 5) {
+                    document.getElementById("distanceStatus").textContent =
+                        "DISTANCE ALERT!";
+                    document.getElementById("distanceStatus").className =
+                        "status danger";
+
+                    // Play only when entering the alert state.
+                    if (!distanceAlarmActive) {
+                        playDistanceSound();
+                        distanceAlarmActive = true;
+                    }
+                } else {
+                    document.getElementById("distanceStatus").textContent =
+                        "Normal";
+                    document.getElementById("distanceStatus").className =
+                        "status safe";
+
+                    distanceAlarmActive = false;
+                }
+            } else {
+                document.getElementById("distance").textContent = "-- cm";
+            }
+
+            // Display human detection
+            if (motion) {
+                document.getElementById("motion").textContent =
+                    "HUMAN DETECTED";
+                document.getElementById("motion").className =
+                    "status danger";
+
+                // Play only when motion changes from false -> true.
+                if (!motionAlarmActive) {
+                    playMotionSound();
+                    motionAlarmActive = true;
+                }
+            } else {
+                document.getElementById("motion").textContent =
+                    "No Human Detected";
+                document.getElementById("motion").className =
+                    "status safe";
+
+                motionAlarmActive = false;
+            }
+
+            document.getElementById("connection").textContent =
+                "Firebase: Connected";
+
+        } catch (error) {
+            console.error(error);
+            document.getElementById("connection").textContent =
+                "Firebase: Connection error";
+        }
+    }
+
+    // Read immediately, then every 1 second.
+    readFirebase();
+    setInterval(readFirebase, 1000);
+</script>
+
+</body>
+</html>
